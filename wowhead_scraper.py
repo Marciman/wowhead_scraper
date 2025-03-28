@@ -1,106 +1,117 @@
 # wowhead_scraper.py
 import requests
-from bs4 import BeautifulSoup
 import json
 import re
-import time
+from bs4 import BeautifulSoup
 
-BASE_URL = "https://www.wowhead.com/de/hunter-pets"
+BASE_URL = "https://www.wowhead.com/de/pets/tameable"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
 
-def scrape_pet_page(url):
-    try:
-        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        pet_data = {}
-        
-        # Name (Haupttitel)
-        name_element = soup.select_one('.heading-size-1')
-        pet_data['name'] = name_element.text.strip() if name_element else "N/A"
-        
-        # Zone (In Zonenbeschreibung oder Karte)
-        zone_element = soup.select_one('.location')
-        pet_data['zone'] = zone_element.text.strip() if zone_element else "N/A"
-        
-        # Seltenheit (In den Tags oder Beschreibung)
-        rarity_element = soup.select_one('.q')
-        pet_data['rarity'] = rarity_element.text.strip() if rarity_element else "Gewöhnlich"
-        
-        # Familie (z.B. "Geistbestie", "Katzentier", etc.)
-        family_element = soup.select_one('a[href*="/de/hunter-pets/family="]')
-        pet_data['family'] = family_element.text.strip() if family_element else "N/A"
-        
-        # Fähigkeiten (Tooltip mit Fähigkeit oder Extra-Block)
-        abilities = []
-        for ability in soup.select('.listview-cleartext[href*="/de/spell="]'):
-            abilities.append(ability.text.strip())
-        pet_data['ability'] = ", ".join(abilities) if abilities else "N/A"
-        
-        # Icon und Model ID (In eingebettetem JS)
-        script_content = soup.find('script', string=re.compile('modelViewer.setModel'))
-        model_id = re.search(r'modelViewer\.setModel\((\d+)', script_content.string).group(1) if script_content else "N/A"
-        pet_data['modelID'] = model_id
-        pet_data['icon'] = f"https://wow.zamimg.com/images/wow/icons/large/creatureportrait_{model_id}.jpg"
-        
-        # Spawn-Koordinaten (z.B. "(31,55)")
-        spawn_text = soup.find(string=re.compile(r'\(?\d+[,\.]\d+\)?'))
-        pet_data['spawn'] = spawn_text.strip() if spawn_text else "N/A"
-        
-        # Spawn-Zeit (In Beschreibung oder extra Info, z.B. "6-12h")
-        spawn_time = soup.find(string=re.compile(r'\d+[-–]\d+[hH]'))
-        pet_data['spawnTime'] = spawn_time.strip() if spawn_time else "N/A"
-        
-        # Beschreibung (Kurzer Text bei Wowhead)
-        description_element = soup.select_one('.wowhead-tooltip .q0')
-        pet_data['description'] = description_element.text.strip() if description_element else "N/A"
-        
-        # Voraussetzungen ("Kann nur gezähmt werden von...")
-        req_element = soup.find(string=re.compile(r'Kann nur gezähmt werden von'))
-        pet_data['requirements'] = req_element.strip() if req_element else "Keine"
-        
-        return pet_data
+def extract_pet_data(script_content):
+    """Extrahiert die vollständige Pet-Liste aus dem JavaScript-Code"""
+    match = re.search(r'data: (\[.*?\])', script_content)
+    if not match:
+        return []
     
-    except Exception as e:
-        print(f"Fehler beim Scrapen von {url}: {str(e)}")
-        return None
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return []
 
-def scrape_pet_links():
+def get_spell_names(spell_ids):
+    """Holt die Namen der Fähigkeiten"""
+    # Vereinfachte Version - könnte erweitert werden
+    spell_names = []
+    for spell_id in spell_ids:
+        if spell_id == 16827:   # Beispiel-IDs
+            spell_names.append("Wiederbelebung des Begleiters")
+        elif spell_id == 160065:
+            spell_names.append("Knurren")
+        elif spell_id == 280151:
+            spell_names.append("Giftspucke")
+    return spell_names
+
+def scrape_pets():
     try:
         response = requests.get(BASE_URL, headers={"User-Agent": USER_AGENT}, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        pet_links = []
-        for link in soup.select('a.listview-cleartext[href*="/de/npc="]'):
-            pet_links.append(f"https://www.wowhead.com{link['href']}")
+        # Finde das Listview-Script mit den Pet-Daten
+        script = soup.find('script', string=re.compile('new Listview'))
+        if not script:
+            raise ValueError("Listview-Daten nicht gefunden")
         
-        return list(set(pet_links))  # Duplikate entfernen
+        pets_data = extract_pet_data(script.string)
+        if not pets_data:
+            raise ValueError("Keine Pet-Daten extrahiert")
+        
+        # Zusätzliche Details von jeder Pet-Seite holen
+        full_pets = []
+        for pet in pets_data[:5]:  # Erstmal nur 5 zum Testen
+            pet_details = {
+                "id": pet["id"],
+                "name": pet["name"],
+                "family": get_family_name(pet["type"]),
+                "icon": f"https://wow.zamimg.com/images/wow/icons/large/{pet['icon']}.jpg",
+                "level": f"{pet['minLevel']}-{pet['maxLevel']}",
+                "abilities": ", ".join(get_spell_names(pet.get("spells", []))),
+                "diet": get_diet_name(pet.get("diet", 0)),
+                "exotic": bool(pet.get("exotic", 0)),
+                "popularity": pet.get("popularity", 0)
+            }
+            
+            # Hole Zonen-Info von der Detailseite
+            zone_info = get_zone_info(pet["id"])
+            pet_details.update(zone_info)
+            
+            full_pets.append(pet_details)
+        
+        return full_pets
     
     except Exception as e:
-        print(f"Fehler beim Sammeln der Pet-Links: {str(e)}")
+        print(f"Fehler beim Scrapen: {str(e)}")
         return []
 
+def get_family_name(family_id):
+    """Konvertiert Familien-ID in Namen"""
+    families = {
+        1: "Wolf", 2: "Aqir", 3: "Spinnentier", 
+        # Weitere Familien hier ergänzen
+    }
+    return families.get(family_id, "Unbekannt")
+
+def get_diet_name(diet_id):
+    """Konvertiert Ernährungs-Typ"""
+    diets = {
+        0: "Keine", 1: "Fleisch", 2: "Fisch", 
+        17: "Magie"  # Beispiel für Aqir
+    }
+    return diets.get(diet_id, "Unbekannt")
+
+def get_zone_info(pet_id):
+    """Holt Zonen-Info von der Pet-Detailseite"""
+    try:
+        url = f"https://www.wowhead.com/de/pet={pet_id}"
+        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        zone = soup.select_one('.location')
+        spawn = soup.find(string=re.compile(r'\(?\d+[,\.]\d+\)?'))
+        
+        return {
+            "zone": zone.text.strip() if zone else "N/A",
+            "spawn": spawn.strip() if spawn else "N/A"
+        }
+    except:
+        return {"zone": "N/A", "spawn": "N/A"}
+
 def main():
-    pet_links = scrape_pet_links()
-    print(f"{len(pet_links)} Pet-Seiten gefunden")
-    
-    pets = []
-    for i, link in enumerate(pet_links, 1):
-        # 1-2 Sekunden Wartezeit zwischen den Anfragen
-        if i > 1:
-            time.sleep(1.5)
-            
-        pet_data = scrape_pet_page(link)
-        if pet_data:
-            pets.append(pet_data)
-            print(f"{i}/{len(pet_links)}: {pet_data['name']} gescraped")
-    
+    pets = scrape_pets()
     with open('wowhead_pets.json', 'w', encoding='utf-8') as f:
         json.dump(pets, f, ensure_ascii=False, indent=2)
     
-    print(f"Erfolgreich {len(pets)} Pets gesammelt")
+    print(f"Erfolgreich {len(pets)} Pets gespeichert")
 
 if __name__ == "__main__":
     main()
