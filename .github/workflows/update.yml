@@ -1,0 +1,48 @@
+# update.yml
+name: Pet-Daten aktualisieren
+on:
+  workflow_dispatch:
+
+jobs:
+  update_pets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Python einrichten
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Abhängigkeiten installieren
+      run: |
+        python -m pip install --upgrade pip
+        pip install beautifulsoup4 requests
+        
+    - name: Daten scrapen
+      run: |
+        python wowhead_scraper.py
+        echo "Gescrapete Daten:"
+        jq 'length' wowhead_pets.json
+        [ $(jq 'length' wowhead_pets.json) -gt 0 ] || exit 1
+        
+    - name: Lua generieren
+      run: |
+        python json_to_lua.py
+        echo "Erster Pet in Lua:"
+        head -n 20 HRT_Data.lua
+        
+    - name: Änderungen committen
+      env:
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git remote set-url origin "https://x-access-token:$GH_TOKEN@github.com/${{ github.repository }}.git"
+        git add .
+        git diff --quiet && git diff --cached --quiet || git commit -m "Datenupdate $(date +'%Y-%m-%d %H:%M')"
+        git push origin main
