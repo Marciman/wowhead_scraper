@@ -5,29 +5,24 @@ def convert_to_lua():
     with open('wowhead_pets.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     
-    lua_output = """-- Automatisch generierte Pet-Daten von Wowhead
+    lua_output = """-- Auto-generierte Pet-Daten von Wowhead
 HRT_Data = {
     pets = {
 """
     
     for pet in data:
         lua_output += f"""        {{
+            id = {pet['id']},
             name = "{pet['name']}",
-            zone = "{pet['zone']}",
-            rarity = "{pet['rarity']}",
             family = "{pet['family']}",
-            ability = "{pet['ability']}",
             icon = "{pet['icon']}",
-            modelID = {pet['modelID']},
-            spawn = "{pet['spawn']}","""
-            
-        if 'spawnTime' in pet:
-            lua_output += f"""
-            spawnTime = "{pet['spawnTime']}","""
-            
-        lua_output += f"""
-            description = "{pet['description']}",
-            requirements = "{pet['requirements']}",
+            level = "{pet['level']}",
+            abilities = "{pet['abilities']}",
+            diet = "{pet['diet']}",
+            exotic = {"true" if pet['exotic'] else "false"},
+            popularity = {pet['popularity']},
+            zone = "{pet['zone']}",
+            spawn = "{pet['spawn']}"
         }},
 """
     
